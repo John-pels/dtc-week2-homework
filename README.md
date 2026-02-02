@@ -262,7 +262,7 @@ Columns are automatically detected from the CSV files and include:
 
 ## Author
 
-Data Engineering Zoomcamp - Module 2 Homework
+John O. Emmanuel - Module 2 Homework
 Workflow Orchestration with Kestra
 
 ## License
