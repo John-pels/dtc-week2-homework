@@ -1,0 +1,43 @@
+id: taxi_ingest_batch
+namespace: de.zoomcamp
+
+description: Process multiple taxi data files using ForEach and Subflow
+
+inputs:
+  - id: year
+    type: STRING
+    defaults: "2021"
+
+variables:
+  # Define the combinations to process
+  taxi_types:
+    - yellow
+    - green
+  months:
+    - "01"
+    - "02"
+    - "03"
+    - "04"
+    - "05"
+    - "06"
+    - "07"
+
+tasks:
+  - id: process_each_taxi_type
+    type: io.kestra.plugin.core.flow.ForEach
+    values: "{{vars.taxi_types}}"
+    tasks:
+      - id: process_each_month
+        type: io.kestra.plugin.core.flow.ForEach
+        values: "{{vars.months}}"
+        tasks:
+          - id: trigger_ingest_flow
+            type: io.kestra.plugin.core.flow.Subflow
+            namespace: de.zoomcamp
+            flowId: taxi_ingest
+            inputs:
+              taxi: "{{parent.taskrun.value}}"
+              year: "{{inputs.year}}"
+              month: "{{taskrun.value}}"
+            wait: true
+            transmitFailed: true

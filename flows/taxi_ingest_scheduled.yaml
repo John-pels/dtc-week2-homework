@@ -1,0 +1,59 @@
+id: taxi_ingest_scheduled
+namespace: de.zoomcamp
+
+inputs:
+  - id: taxi
+    type: STRING
+    defaults: yellow
+
+variables:
+  file: "{{inputs.taxi}}_tripdata_{{ trigger.date ?? execution.startDate | date('yyyy-MM') }}.csv"
+  url: "https://github.com/DataTalksClub/nyc-tlc-data/releases/download/{{inputs.taxi}}/{{inputs.taxi}}_tripdata_{{ trigger.date ?? execution.startDate | date('yyyy-MM') }}.csv.gz"
+
+tasks:
+  - id: extract
+    type: io.kestra.plugin.core.http.Download
+    uri: "{{vars.url}}"
+
+  - id: uncompress
+    type: io.kestra.plugin.compress.ArchiveDecompress
+    algorithm: GZIP
+    from: "{{outputs.extract.uri}}"
+
+  - id: load_to_postgres
+    type: io.kestra.plugin.scripts.python.Script
+    containerImage: python:3.11-slim
+    beforeCommands:
+      - pip install pandas sqlalchemy psycopg2-binary
+    script: |
+      import pandas as pd
+      from sqlalchemy import create_engine
+
+      # Read the CSV file
+      csv_file = "{{outputs.uncompress.files[vars.file]}}"
+      df = pd.read_csv(csv_file)
+
+      # Convert datetime columns
+      datetime_columns = [col for col in df.columns if 'datetime' in col.lower() or col in ['lpep_pickup_datetime', 'lpep_dropoff_datetime', 'tpep_pickup_datetime', 'tpep_dropoff_datetime']]
+      for col in datetime_columns:
+        if col in df.columns:
+          df[col] = pd.to_datetime(df[col])
+
+      # Create database connection
+      engine = create_engine('postgresql://root:root@pgdatabase:5432/ny_taxi')
+
+      # Determine table name
+      table_name = '{{inputs.taxi}}_taxi_data'
+
+      # Load to PostgreSQL
+      df.to_sql(name=table_name, con=engine, if_exists='append', index=False, chunksize=100000)
+
+      print(f"Loaded {len(df)} rows to {table_name}")
+
+triggers:
+  - id: monthly_schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 0 1 * *" # Run on the 1st of every month
+    timezone: America/New_York
+    backfill:
+      start: 2019-01-01T00:00:00Z

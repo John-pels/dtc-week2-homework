@@ -1,0 +1,84 @@
+id: taxi_ingest
+namespace: de.zoomcamp
+
+inputs:
+  - id: taxi
+    type: STRING
+    defaults: yellow
+  - id: year
+    type: STRING
+    defaults: "2020"
+  - id: month
+    type: STRING
+    defaults: "01"
+
+variables:
+  file: "{{inputs.taxi}}_tripdata_{{inputs.year}}-{{inputs.month}}.csv"
+  url: "https://github.com/DataTalksClub/nyc-tlc-data/releases/download/{{inputs.taxi}}/{{inputs.taxi}}_tripdata_{{inputs.year}}-{{inputs.month}}.csv.gz"
+
+tasks:
+  - id: extract
+    type: io.kestra.plugin.core.http.Download
+    uri: "{{vars.url}}"
+
+  - id: uncompress
+    type: io.kestra.plugin.compress.ArchiveDecompress
+    algorithm: GZIP
+    from: "{{outputs.extract.uri}}"
+
+  - id: load_to_postgres
+    type: io.kestra.plugin.scripts.python.Script
+    containerImage: python:3.11-slim
+    beforeCommands:
+      - pip install pandas sqlalchemy psycopg2-binary
+    script: |
+      import pandas as pd
+      from sqlalchemy import create_engine
+      import os
+
+      # Read the CSV file
+      csv_file = "{{outputs.uncompress.files[vars.file]}}"
+      df = pd.read_csv(csv_file)
+
+      # Convert datetime columns
+      datetime_columns = [col for col in df.columns if 'datetime' in col.lower() or col in ['lpep_pickup_datetime', 'lpep_dropoff_datetime', 'tpep_pickup_datetime', 'tpep_dropoff_datetime']]
+      for col in datetime_columns:
+        if col in df.columns:
+          df[col] = pd.to_datetime(df[col])
+
+      # Create database connection
+      engine = create_engine('postgresql://root:root@pgdatabase:5432/ny_taxi')
+
+      # Determine table name
+      table_name = '{{inputs.taxi}}_taxi_data'
+
+      # Load to PostgreSQL
+      df.to_sql(name=table_name, con=engine, if_exists='append', index=False, chunksize=100000)
+
+      print(f"Loaded {len(df)} rows to {table_name}")
+      print(f"File: {{vars.file}}")
+
+  - id: stats
+    type: io.kestra.plugin.scripts.python.Script
+    containerImage: python:3.11-slim
+    beforeCommands:
+      - pip install pandas
+    script: |
+      import pandas as pd
+      import os
+
+      csv_file = "{{outputs.uncompress.files[vars.file]}}"
+      df = pd.read_csv(csv_file)
+
+      row_count = len(df)
+      file_size = os.path.getsize(csv_file)
+      file_size_mb = file_size / (1024 * 1024)
+
+      print(f"File: {{vars.file}}")
+      print(f"Row count: {row_count:,}")
+      print(f"File size: {file_size_mb:.1f} MiB")
+
+      # Output for use in other tasks
+      with open('stats.txt', 'w') as f:
+        f.write(f"rows={row_count}\n")
+        f.write(f"size_mb={file_size_mb:.1f}\n")
